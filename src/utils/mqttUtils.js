@@ -116,6 +116,12 @@ export function handleAutoRelay3({ data, relay, security, send }) {
         return;
     }
 
+    if (!security && vbat > 0 && r1 === 0 && r3 === 1) {
+        console.log("🔒 kondisi security off");
+        send("R3_OFF");
+        return;
+    }
+
     if (security && vbat > 0 && r1 === 1 && r3 === 1) {
         console.log("🔒 Kondis Normal");
         send("R3_OFF");
