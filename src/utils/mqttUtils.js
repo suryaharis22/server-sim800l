@@ -116,15 +116,10 @@ export function handleAutoRelay3({ data, relay, security, send }) {
         return;
     }
 
-    if (security && vbat > 0 && r3 === 0) {
-        console.log("🔒 Security aktif & ada tegangan → Mengirim R3_ON (fallback)");
-        send("R3_ON");
-        return;
-    }
-
-    if (!security && r3 === 1) {
-        console.log("🔓 Security nonaktif → Mengirim R3_OFF");
+    if (security && vbat > 0 && r1 === 1 && r3 === 1) {
+        console.log("🔒 Kondis Normal");
         send("R3_OFF");
+        return;
     }
 }
 
