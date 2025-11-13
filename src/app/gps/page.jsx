@@ -12,7 +12,7 @@ import {
 } from "@/utils/mqttUtils";
 
 // 🚀 Lazy load komponen MapView (hindari SSR error)
-const MapView = dynamic(() => import("./MapView"), { ssr: false });
+const MapView = dynamic(() => import("./gps/MapView"), { ssr: false });
 
 export default function Dashboard() {
     const [data, setData] = useState({});

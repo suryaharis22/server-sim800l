@@ -1,7 +1,7 @@
 "use client";
 
 import dynamic from "next/dynamic";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { motion } from "framer-motion";
 import {
   initMqttClient,
@@ -28,6 +28,8 @@ export default function Dashboard() {
     security: false,
     reset: false,
   });
+
+  const sendOnInterval = useRef(null);
 
   // MQTT setup
   const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
@@ -68,6 +70,34 @@ export default function Dashboard() {
   useEffect(() => {
     handleAutoRelay2Off({ relay, send: publish });
   }, [relay.r1, relay.r2]);
+
+  // 🔄 SEND_ON loop & SEND_OFF saat halaman close
+  useEffect(() => {
+    if (!client) return;
+
+    // Kirim SEND_ON saat pertama kali load
+    publish("SEND_ON");
+
+    // Loop SEND_ON setiap 20 detik
+    sendOnInterval.current = setInterval(() => {
+      publish("SEND_ON");
+    }, 20000);
+
+    const handleUnload = () => {
+      if (sendOnInterval.current) clearInterval(sendOnInterval.current);
+      publish("SEND_OFF");
+    };
+
+    window.addEventListener("beforeunload", handleUnload);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "hidden") handleUnload();
+    });
+
+    return () => {
+      if (sendOnInterval.current) clearInterval(sendOnInterval.current);
+      window.removeEventListener("beforeunload", handleUnload);
+    };
+  }, [client]);
 
   // Default posisi Malang (jika belum ada data GPS)
   const lat = data?.gps?.lat || -7.981894;
@@ -152,6 +182,7 @@ export default function Dashboard() {
           🚫 Belum ada data GPS untuk ditampilkan
         </motion.div>
       )}
+
       {/* Relay Controls */}
       <motion.div
         className="grid grid-cols-1 sm:grid-cols-2 gap-4 w-full max-w-lg mb-6"
@@ -250,7 +281,11 @@ export default function Dashboard() {
           className={`px-6 py-3 rounded-xl font-semibold transition duration-300 ${security ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
             } ${loading.security ? "opacity-50 cursor-not-allowed" : ""}`}
         >
-          {loading.security ? "⏳ Memproses..." : security ? "🔒 Matikan Security" : "🔓 Aktifkan Security"}
+          {loading.security
+            ? "⏳ Memproses..."
+            : security
+              ? "🔒 Matikan Security"
+              : "🔓 Aktifkan Security"}
         </button>
 
         <p className="mt-3 text-sm text-gray-400">
