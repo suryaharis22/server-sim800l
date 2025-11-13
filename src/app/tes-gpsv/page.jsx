@@ -3,6 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
+import toast, { Toaster } from "react-hot-toast";
 import { initMqttClient, sendCmd } from "@/utils/mqttUtilsV2";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
@@ -27,55 +28,50 @@ export default function Dashboard() {
 
     const sendOnIntervalRef = useRef(null);
 
-    // 🔌 INIT MQTT
+    // ==========================================================
+    //  INIT MQTT
+    // ==========================================================
     useEffect(() => {
         const mqttClient = initMqttClient(
             brokerUrl,
             topicSubData,
             setStatus,
             (topic, message) => {
-                if (topic === topicSubData) {
-                    try {
-                        const json = JSON.parse(message.toString());
-                        setData(json);
+                if (topic !== topicSubData) return;
 
-                        // relay update
-                        if (json.relay) setRelay(json.relay);
+                try {
+                    const json = JSON.parse(message.toString());
+                    setData(json);
 
-                        // ✅ update security dari root
-                        if (typeof json.security !== "undefined") {
-                            setSecurity(json.security);
-                            console.log(
-                                json.security
-                                    ? "🔒 Security ON (Proteksi aktif)"
-                                    : "🔓 Security OFF (Mode manual)"
-                            );
-                        }
-                    } catch (e) {
-                        console.error("Invalid JSON message:", e);
+                    if (json.relay) setRelay(json.relay);
+                    if (typeof json.security !== "undefined") {
+                        setSecurity(json.security);
                     }
+                } catch (e) {
+                    console.error("Invalid JSON:", e);
                 }
             }
         );
 
         setClient(mqttClient);
 
+        // cleanup
         return () => {
             if (sendOnIntervalRef.current) {
                 clearInterval(sendOnIntervalRef.current);
                 sendOnIntervalRef.current = null;
             }
             try {
-                if (mqttClient && mqttClient.connected)
+                if (mqttClient?.connected)
                     mqttClient.publish(topicPubCmd, "SEND_OFF");
                 mqttClient.end(true);
-            } catch (e) {
-                console.warn("MQTT cleanup error:", e);
-            }
+            } catch { }
         };
     }, []);
 
-    // 🔁 SEND_ON Loop + AUTO OFF saat unload
+    // ==========================================================
+    //  LOOP SEND_ON
+    // ==========================================================
     useEffect(() => {
         if (!client) return;
 
@@ -91,15 +87,12 @@ export default function Dashboard() {
                 sendOnIntervalRef.current = null;
             }
             try {
-                if (client && client.connected) {
-                    client.publish(topicPubCmd, "SEND_OFF");
-                }
-            } catch (e) {
-                console.warn("Error sending SEND_OFF:", e);
-            }
+                if (client?.connected) client.publish(topicPubCmd, "SEND_OFF");
+            } catch { }
         };
 
         window.addEventListener("beforeunload", handleUnload);
+
         document.addEventListener("visibilitychange", () => {
             if (document.visibilityState === "hidden") handleUnload();
         });
@@ -113,61 +106,103 @@ export default function Dashboard() {
         };
     }, [client]);
 
-    // helper kirim MQTT
-    const publish = (cmd) => sendCmd(client, topicPubCmd, cmd);
-
-    // 🔘 Relay handler
-    const toggleRelay = (relayKey) => {
-        const current = relay[relayKey];
-        let cmd = "";
-
-        if (relayKey === "r1") cmd = current ? "R1_OFF" : "R1_ON";
-        if (relayKey === "r2") cmd = current ? "R2_OFF" : "R2_ON";
-        if (relayKey === "r4") cmd = current ? "R4_OFF" : "R4_ON";
-
-        setLoading((s) => ({ ...s, [relayKey]: true }));
-        publish(cmd);
-        setTimeout(() => setLoading((s) => ({ ...s, [relayKey]: false })), 800);
+    // ==========================================================
+    //  PUBLISH HELPER
+    // ==========================================================
+    const publish = (cmd, successMsg) => {
+        if (!client || !client.connected) {
+            toast.error("MQTT tidak terhubung!");
+            return;
+        }
+        sendCmd(client, topicPubCmd, cmd);
+        toast.success(successMsg);
     };
 
-    // 🔒 Security handler
+    // ==========================================================
+    //  RELAY HANDLER
+    // ==========================================================
+    const toggleRelay = (relayKey) => {
+        if (security) {
+            toast.error("Tidak bisa! Security ON 🚫");
+            return;
+        }
+
+        const current = relay[relayKey];
+        const cmdMap = {
+            r1: current ? "R1_OFF" : "R1_ON",
+            r2: current ? "R2_OFF" : "R2_ON",
+            r4: current ? "R4_OFF" : "R4_ON",
+        };
+
+        const messageMap = {
+            R1_ON: "Kontak ON 🔌",
+            R1_OFF: "Kontak OFF ❌",
+            R2_ON: "Starter aktif 🟢",
+            R2_OFF: "Starter OFF 🔴",
+            R4_ON: "Lampu ON 💡",
+            R4_OFF: "Lampu OFF 🔦",
+        };
+
+        const cmd = cmdMap[relayKey];
+        const msg = messageMap[cmd];
+
+        setLoading((s) => ({ ...s, [relayKey]: true }));
+        publish(cmd, msg);
+
+        setTimeout(
+            () => setLoading((s) => ({ ...s, [relayKey]: false })),
+            800
+        );
+    };
+
+    // ==========================================================
+    //  SECURITY HANDLER
+    // ==========================================================
     const toggleSecurity = () => {
         setLoading((s) => ({ ...s, security: true }));
 
         if (security) {
-            publish("SEC_OFF");
+            publish("SEC_OFF", "Security dimatikan 🔓");
             setSecurity(false);
-            console.log("🔓 Security OFF → Mode manual aktif");
         } else {
-            publish("SEC_ON");
+            publish("SEC_ON", "Security diaktifkan 🔒");
             setSecurity(true);
-            console.log("🔒 Security ON → Mode proteksi aktif");
         }
 
-        setTimeout(() => setLoading((s) => ({ ...s, security: false })), 800);
+        setTimeout(
+            () => setLoading((s) => ({ ...s, security: false })),
+            800
+        );
     };
 
+    // GPS fallback
     const lat = data?.gps?.lat ?? -7.981894;
     const lng = data?.gps?.lng ?? 112.626503;
 
+    // ==========================================================
+    //  UI
+    // ==========================================================
     return (
         <main className="min-h-screen bg-gray-900 text-white p-6 flex flex-col items-center">
+            <Toaster position="top-center" />
+
             <motion.h1
                 initial={{ opacity: 0, y: -20 }}
                 animate={{ opacity: 1, y: 0 }}
                 transition={{ duration: 0.5 }}
-                className="text-3xl font-bold mb-4"
+                className="text-3xl font-bold mb-2"
             >
-                🚗 Tracker Dashboard
+                🚗 Smart Tracker Dashboard
             </motion.h1>
 
-            <p className="text-gray-400 mb-4">{status}</p>
+            <p className="text-gray-400 mb-6">{status}</p>
 
-            {/* Device Info */}
-            <div className="w-full max-w-3xl bg-gray-800 rounded-2xl p-6 mb-6">
-                <div className="grid grid-cols-2 gap-4">
+            {/* DEVICE CARD */}
+            <div className="w-full max-w-3xl bg-gray-800 rounded-2xl p-6 mb-6 shadow-lg">
+                <div className="grid grid-cols-2 gap-6">
+                    {/* LEFT SIDE */}
                     <div>
-                        <h3 className="text-lg font-semibold mb-2">Device</h3>
+                        <h3 className="text-lg font-semibold mb-2">Device Info</h3>
                         <div className="text-sm text-gray-300 space-y-1">
                             <div>Device: {data.device_id ?? "-"}</div>
                             <div>
@@ -176,15 +211,19 @@ export default function Dashboard() {
                                     ? new Date(data.timestamp * 1000).toLocaleString()
                                     : "-"}
                             </div>
-                            <div>Vbat: {data.sys?.vbat ? `${data.sys.vbat} V` : "-"}</div>
+                            <div>
+                                Vbat: {data.sys?.vbat ? `${data.sys.vbat} V` : "-"}
+                            </div>
                             <div>Signal: {data.sys?.rssi ?? "-"} dBm</div>
                             <div>Operator: {data.sys?.operator ?? "-"}</div>
                         </div>
                     </div>
 
-                    {/* Relay Control */}
+                    {/* RIGHT SIDE CONTROLS */}
                     <div>
                         <h3 className="text-lg font-semibold mb-2">Controls</h3>
+
+                        {/* RELAY BUTTONS */}
                         <div className="flex gap-2 flex-wrap">
                             {[
                                 { k: "r1", labelOn: "🔴 Matikan Kontak", labelOff: "🟢 Nyalakan Kontak" },
@@ -195,8 +234,8 @@ export default function Dashboard() {
                                     key={b.k}
                                     onClick={() => toggleRelay(b.k)}
                                     disabled={loading[b.k] || security}
-                                    className={`px-4 py-2 rounded-md font-medium ${relay[b.k] ? "bg-red-600" : "bg-green-600"
-                                        } ${security ? "opacity-50 cursor-not-allowed" : ""}`}
+                                    className={`px-4 py-2 rounded-md font-medium transition-all ${relay[b.k] ? "bg-red-600" : "bg-green-600"
+                                        } ${security ? "opacity-40 cursor-not-allowed" : ""}`}
                                 >
                                     {loading[b.k]
                                         ? "⏳"
@@ -207,12 +246,12 @@ export default function Dashboard() {
                             ))}
                         </div>
 
-                        {/* Security Button */}
+                        {/* SECURITY BUTTON */}
                         <div className="mt-4">
                             <button
                                 onClick={toggleSecurity}
                                 disabled={loading.security}
-                                className={`px-4 py-2 rounded-md font-medium ${security ? "bg-red-600" : "bg-blue-600"
+                                className={`px-4 py-2 rounded-md font-medium transition-all ${security ? "bg-red-600" : "bg-blue-600"
                                     }`}
                             >
                                 {loading.security
@@ -226,10 +265,10 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            {/* Map View */}
+            {/* MAP */}
             <div className="w-full max-w-3xl mb-6">
                 <h3 className="text-lg font-semibold mb-2">Map</h3>
-                <div className="h-72 rounded-xl overflow-hidden border border-gray-700">
+                <div className="h-72 rounded-xl overflow-hidden border border-gray-700 shadow-md">
                     <MapView lat={lat} lng={lng} />
                 </div>
             </div>
