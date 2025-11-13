@@ -21,14 +21,13 @@ export default function Dashboard() {
         security: false,
     });
 
-    // MQTT setup
     const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
     const topicPubCmd = "eefded87a3fd15f42b2b0b33de8fd422/cmd-control";
     const topicSubData = "eefded87a3fd15f42b2b0b33de8fd422/data-gps";
 
     const sendOnIntervalRef = useRef(null);
 
-    // ========== INIT MQTT ==========
+    // 🔌 INIT MQTT
     useEffect(() => {
         const mqttClient = initMqttClient(
             brokerUrl,
@@ -40,21 +39,17 @@ export default function Dashboard() {
                         const json = JSON.parse(message.toString());
                         setData(json);
 
-                        // update relay state
+                        // relay update
                         if (json.relay) setRelay(json.relay);
 
-                        // update security logic
-                        if (json.sys && typeof json.sys.sec !== "undefined") {
-                            const secState = json.sys.sec;
-                            setSecurity(secState);
-
-                            // jika security OFF, relay3 otomatis off
-                            if (secState === false) {
-                                setRelay((prev) => ({ ...prev, r3: 0 }));
-                                console.log("Security OFF → Relay3 dimatikan (manual mode).");
-                            } else {
-                                console.log("Security ON → Proteksi aktif (auto mode).");
-                            }
+                        // ✅ update security dari root
+                        if (typeof json.security !== "undefined") {
+                            setSecurity(json.security);
+                            console.log(
+                                json.security
+                                    ? "🔒 Security ON (Proteksi aktif)"
+                                    : "🔓 Security OFF (Mode manual)"
+                            );
                         }
                     } catch (e) {
                         console.error("Invalid JSON message:", e);
@@ -65,7 +60,6 @@ export default function Dashboard() {
 
         setClient(mqttClient);
 
-        // cleanup on unmount
         return () => {
             if (sendOnIntervalRef.current) {
                 clearInterval(sendOnIntervalRef.current);
@@ -79,22 +73,18 @@ export default function Dashboard() {
                 console.warn("MQTT cleanup error:", e);
             }
         };
-        // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ========== SEND_ON Loop + OFF saat unload ==========
+    // 🔁 SEND_ON Loop + AUTO OFF saat unload
     useEffect(() => {
         if (!client) return;
 
-        // kirim SEND_ON awal
         sendCmd(client, topicPubCmd, "SEND_ON");
 
-        // interval 20 detik
         sendOnIntervalRef.current = setInterval(() => {
             sendCmd(client, topicPubCmd, "SEND_ON");
-        }, 20000);
+        }, 10000);
 
-        // handle tab close
         const handleUnload = () => {
             if (sendOnIntervalRef.current) {
                 clearInterval(sendOnIntervalRef.current);
@@ -109,12 +99,10 @@ export default function Dashboard() {
             }
         };
 
-        const handleVisibility = () => {
-            if (document.visibilityState === "hidden") handleUnload();
-        };
-
         window.addEventListener("beforeunload", handleUnload);
-        document.addEventListener("visibilitychange", handleVisibility);
+        document.addEventListener("visibilitychange", () => {
+            if (document.visibilityState === "hidden") handleUnload();
+        });
 
         return () => {
             if (sendOnIntervalRef.current) {
@@ -122,48 +110,43 @@ export default function Dashboard() {
                 sendOnIntervalRef.current = null;
             }
             window.removeEventListener("beforeunload", handleUnload);
-            document.removeEventListener("visibilitychange", handleVisibility);
         };
     }, [client]);
 
-    // publish helper
+    // helper kirim MQTT
     const publish = (cmd) => sendCmd(client, topicPubCmd, cmd);
 
-    // ========== Relay Handler ==========
-    const toggleRelay = async (relayKey) => {
+    // 🔘 Relay handler
+    const toggleRelay = (relayKey) => {
         const current = relay[relayKey];
         let cmd = "";
+
         if (relayKey === "r1") cmd = current ? "R1_OFF" : "R1_ON";
         if (relayKey === "r2") cmd = current ? "R2_OFF" : "R2_ON";
-        if (relayKey === "r3") cmd = current ? "R3_OFF" : "R3_ON";
         if (relayKey === "r4") cmd = current ? "R4_OFF" : "R4_ON";
 
         setLoading((s) => ({ ...s, [relayKey]: true }));
         publish(cmd);
-        setTimeout(() => setLoading((s) => ({ ...s, [relayKey]: false })), 900);
+        setTimeout(() => setLoading((s) => ({ ...s, [relayKey]: false })), 800);
     };
 
-    // ========== Security Handler ==========
-    const toggleSecurity = async () => {
+    // 🔒 Security handler
+    const toggleSecurity = () => {
         setLoading((s) => ({ ...s, security: true }));
 
         if (security) {
-            // 🔻 Security dimatikan
             publish("SEC_OFF");
             setSecurity(false);
-            setRelay((prev) => ({ ...prev, r3: 0 })); // relay3 otomatis OFF
-            console.log("Security OFF dikirim, sistem manual aktif.");
+            console.log("🔓 Security OFF → Mode manual aktif");
         } else {
-            // 🔒 Security diaktifkan
             publish("SEC_ON");
             setSecurity(true);
-            console.log("Security ON dikirim, sistem proteksi aktif.");
+            console.log("🔒 Security ON → Mode proteksi aktif");
         }
 
-        setTimeout(() => setLoading((s) => ({ ...s, security: false })), 900);
+        setTimeout(() => setLoading((s) => ({ ...s, security: false })), 800);
     };
 
-    // koordinat default
     const lat = data?.gps?.lat ?? -7.981894;
     const lng = data?.gps?.lng ?? 112.626503;
 
@@ -185,7 +168,7 @@ export default function Dashboard() {
                 <div className="grid grid-cols-2 gap-4">
                     <div>
                         <h3 className="text-lg font-semibold mb-2">Device</h3>
-                        <div className="text-sm text-gray-300">
+                        <div className="text-sm text-gray-300 space-y-1">
                             <div>Device: {data.device_id ?? "-"}</div>
                             <div>
                                 Timestamp:{" "}
@@ -193,31 +176,27 @@ export default function Dashboard() {
                                     ? new Date(data.timestamp * 1000).toLocaleString()
                                     : "-"}
                             </div>
-                            <div>
-                                Vbat: {data.sys?.vbat ? `${data.sys.vbat} V` : "-"}
-                            </div>
+                            <div>Vbat: {data.sys?.vbat ? `${data.sys.vbat} V` : "-"}</div>
+                            <div>Signal: {data.sys?.rssi ?? "-"} dBm</div>
+                            <div>Operator: {data.sys?.operator ?? "-"}</div>
                         </div>
                     </div>
 
                     {/* Relay Control */}
                     <div>
-                        <h3 className="text-lg font-semibold mb-2">Relays</h3>
+                        <h3 className="text-lg font-semibold mb-2">Controls</h3>
                         <div className="flex gap-2 flex-wrap">
                             {[
-                                { k: "r1", labelOn: "🔴 Matikan R1", labelOff: "🟢 Nyalakan R1" },
-                                {
-                                    k: "r2",
-                                    labelOn: "🔴 Matikan Starter",
-                                    labelOff: "🟢 Starter",
-                                },
-                                { k: "r4", labelOn: "🔴 Matikan Hazard", labelOff: "🟡 Hazard" },
+                                { k: "r1", labelOn: "🔴 Matikan Kontak", labelOff: "🟢 Nyalakan Kontak" },
+                                { k: "r2", labelOn: "🔴 Matikan Starter", labelOff: "🟢 Starter" },
+                                { k: "r4", labelOn: "🔴 Matikan Lampu", labelOff: "💡 Nyalakan Lampu" },
                             ].map((b) => (
                                 <button
                                     key={b.k}
                                     onClick={() => toggleRelay(b.k)}
-                                    disabled={loading[b.k]}
+                                    disabled={loading[b.k] || security}
                                     className={`px-4 py-2 rounded-md font-medium ${relay[b.k] ? "bg-red-600" : "bg-green-600"
-                                        }`}
+                                        } ${security ? "opacity-50 cursor-not-allowed" : ""}`}
                                 >
                                     {loading[b.k]
                                         ? "⏳"
