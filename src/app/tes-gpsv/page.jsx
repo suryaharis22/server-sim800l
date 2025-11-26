@@ -142,7 +142,9 @@ export default function Dashboard() {
     const toggleRelay = (id) => {
         const current = relays[id] ? 1 : 0;
         const next = current ? 0 : 1;
-        publishField({ [id]: next });
+
+        const cmd = `${id.toUpperCase()}_${next ? "ON" : "OFF"}`;
+        publishPlain(cmd);
     };
 
     const toggleSecurity = () => {
@@ -160,7 +162,7 @@ export default function Dashboard() {
 
         setTimeout(() => {
             setStarterDisabled(false);
-        }, 10000); // 10 detik
+        }, 6000); // 6 detik
     };
 
 
@@ -245,7 +247,7 @@ export default function Dashboard() {
                             disabled={starterDisabled}
                             className={`p-3 rounded ${starterDisabled ? "bg-gray-600 cursor-not-allowed" : "bg-yellow-700"}`}
                         >
-                            {starterDisabled ? "R2 (Cooldown 10s)" : "R2 (Starter)"}
+                            {starterDisabled ? "R2 (Cooldown 6s)" : "R2 (Starter)"}
                         </button>
 
                         {/* === MODIFIED — R3 AUTO === */}
@@ -296,7 +298,7 @@ export default function Dashboard() {
                 </div>
             </div>
 
-            <div className="w-full max-w-4xl bg-gray-800 rounded-lg p-4 text-sm">
+            <div className="w-full h-[500px] max-w-4xl bg-gray-800 rounded-lg p-4 text-sm">
                 <div className="text-gray-300 mb-2">Last payload (from ESP32):</div>
                 <pre className="text-xs text-gray-100 whitespace-pre-wrap">
                     {lastRaw ? JSON.stringify(lastRaw, null, 2) : "No data yet"}
