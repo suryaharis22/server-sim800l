@@ -15,6 +15,7 @@ export default function Dashboard() {
     const [deviceId, setDeviceId] = useState("");
     const [sendStatus, setSendStatus] = useState(false);
     const [security, setSecurity] = useState(false);
+    const [starterDisabled, setStarterDisabled] = useState(false);
 
     const [relays, setRelays] = useState({ r1: 0, r2: 0, r3: 0, r4: 0 });
 
@@ -149,7 +150,19 @@ export default function Dashboard() {
         setSecurity(s => !s);
     };
 
-    const starterPulse = () => publishPlain("R2_ON");
+    const starterPulse = () => {
+        if (starterDisabled) return; // biar tidak spam
+
+        publishPlain("R2_ON");
+
+        // disable 10 detik
+        setStarterDisabled(true);
+
+        setTimeout(() => {
+            setStarterDisabled(false);
+        }, 10000); // 10 detik
+    };
+
 
     const humanRssi = (rssi) => (rssi === -999 ? "unknown" : rssi);
 
@@ -228,10 +241,11 @@ export default function Dashboard() {
 
                         {/* R2 (Starter) */}
                         <button
-                            onClick={() => starterPulse()}
-                            className="p-3 rounded bg-yellow-700"
+                            onClick={starterPulse}
+                            disabled={starterDisabled}
+                            className={`p-3 rounded ${starterDisabled ? "bg-gray-600 cursor-not-allowed" : "bg-yellow-700"}`}
                         >
-                            R2 (Starter)
+                            {starterDisabled ? "R2 (Cooldown 10s)" : "R2 (Starter)"}
                         </button>
 
                         {/* === MODIFIED — R3 AUTO === */}
