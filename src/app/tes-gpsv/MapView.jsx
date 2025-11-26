@@ -121,6 +121,7 @@ export default function MapView({ lat = -7.981894, lng = 112.626503 }) {
                     <Popup>
                         Device location <br />
                         {lat.toFixed(6)}, {lng.toFixed(6)}
+
                     </Popup>
                 </Marker>
             </MapContainer>

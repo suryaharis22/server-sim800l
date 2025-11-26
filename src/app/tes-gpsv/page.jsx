@@ -202,7 +202,13 @@ export default function Dashboard() {
                     </div>
 
                     <div className="mt-4">
-                        <MapView lat={gps.lat} lng={gps.lng} />
+
+                    </div>
+                    <div className="w-full max-w-3xl mb-6">
+                        <h3 className="text-lg font-semibold mb-2">Map</h3>
+                        <div className="h-72 rounded-xl overflow-hidden border border-gray-700 shadow-md">
+                            <MapView lat={gps.lat} lng={gps.lng} />
+                        </div>
                     </div>
                 </div>
 
