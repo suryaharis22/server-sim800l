@@ -1,276 +1,286 @@
+// components/Dashboard.jsx
 "use client";
 
 import dynamic from "next/dynamic";
 import { useEffect, useRef, useState } from "react";
 import { motion } from "framer-motion";
 import toast, { Toaster } from "react-hot-toast";
-import { initMqttClient, sendCmd } from "@/utils/mqttUtilsV2";
+import { initMqttClient, sendCmd } from "@/utils/mqttUtilsV3";
 
 const MapView = dynamic(() => import("./MapView"), { ssr: false });
 
 export default function Dashboard() {
-    const [data, setData] = useState({});
-    const [status, setStatus] = useState("🔴 Disconnected");
-    const [client, setClient] = useState(null);
-    const [relay, setRelay] = useState({ r1: 0, r2: 0, r3: 0, r4: 0 });
+
+    // === STATE MIRROR DARI FIRMWARE ===
+    const [deviceId, setDeviceId] = useState("");
+    const [sendStatus, setSendStatus] = useState(false);
     const [security, setSecurity] = useState(false);
-    const [loading, setLoading] = useState({
-        r1: false,
-        r2: false,
-        r3: false,
-        r4: false,
-        security: false,
-    });
 
+    const [relays, setRelays] = useState({ r1: 0, r2: 0, r3: 0, r4: 0 });
+
+    const [gps, setGps] = useState({ lat: 0, lng: 0, sat: 0, spd: 0 });
+    const [sys, setSys] = useState({ vbat: 0.0, rssi: 0, operator: "" });
+
+    const [mqttConnected, setMqttConnected] = useState(false);
+    const [lastRaw, setLastRaw] = useState(null);
+
+    const clientRef = useRef(null);
+
+    // MQTT TOPIC
     const brokerUrl = "wss://broker.hivemq.com:8884/mqtt";
-    const topicPubCmd = "eefded87a3fd15f42b2b0b33de8fd422/cmd-control";
-    const topicSubData = "eefded87a3fd15f42b2b0b33de8fd422/data-gps";
+    const topicPub = "eefded87a3fd15f42b2b0b33de8fd422/data-gps";
+    const topicSub = "eefded87a3fd15f42b2b0b33de8fd422/cmd-control";
 
-    const sendOnIntervalRef = useRef(null);
-
-    // ==========================================================
-    //  INIT MQTT
-    // ==========================================================
+    // INIT MQTT
     useEffect(() => {
-        const mqttClient = initMqttClient(
-            brokerUrl,
-            topicSubData,
-            setStatus,
-            (topic, message) => {
-                if (topic !== topicSubData) return;
+        const client = initMqttClient(brokerUrl, {
+            onConnect: () => {
+                setMqttConnected(true);
+                client.subscribe(topicPub);
+                toast.success("MQTT connected");
+            },
+
+            onMessage: (topic, msg) => {
+                if (topic !== topicPub) return;
 
                 try {
-                    const json = JSON.parse(message.toString());
-                    setData(json);
+                    const json = JSON.parse(msg);
+                    setLastRaw(json);
 
-                    if (json.relay) setRelay(json.relay);
-                    if (typeof json.security !== "undefined") {
-                        setSecurity(json.security);
+                    if (json.device_id) setDeviceId(json.device_id);
+                    if (json.send_status !== undefined) setSendStatus(Boolean(json.send_status));
+                    if (json.security !== undefined) setSecurity(Boolean(json.security));
+
+                    if (json.gps) {
+                        setGps({
+                            lat: json.gps.lat ?? 0,
+                            lng: json.gps.lng ?? 0,
+                            sat: json.gps.sat ?? 0,
+                            spd: json.gps.spd ?? 0,
+                        });
                     }
+
+                    if (json.sys) {
+                        setSys({
+                            vbat: json.sys.vbat ?? 0,
+                            rssi: json.sys.rssi ?? 0,
+                            operator: json.sys.operator ?? "",
+                        });
+                    }
+
+                    if (json.relay) {
+                        setRelays({
+                            r1: json.relay.r1 ?? 0,
+                            r2: json.relay.r2 ?? 0,
+                            r3: json.relay.r3 ?? 0,
+                            r4: json.relay.r4 ?? 0,
+                        });
+                    }
+
                 } catch (e) {
-                    console.error("Invalid JSON:", e);
+                    console.warn("Invalid JSON:", e);
                 }
+            },
+
+            onClose: () => {
+                setMqttConnected(false);
+                toast.error("MQTT disconnected");
+            },
+
+            onError: (err) => {
+                setMqttConnected(false);
+                console.error("MQTT Error:", err);
             }
-        );
+        });
 
-        setClient(mqttClient);
+        clientRef.current = client;
 
-        // cleanup
         return () => {
-            if (sendOnIntervalRef.current) {
-                clearInterval(sendOnIntervalRef.current);
-                sendOnIntervalRef.current = null;
-            }
-            try {
-                if (mqttClient?.connected)
-                    mqttClient.publish(topicPubCmd, "SEND_OFF");
-                mqttClient.end(true);
-            } catch { }
+            try { client.end(true); } catch { }
         };
     }, []);
 
-    // ==========================================================
-    //  LOOP SEND_ON
-    // ==========================================================
+    // HELPER PUBLISH
+    const publishPlain = (cmd) => {
+        if (!clientRef.current) return;
+        sendCmd(clientRef.current, topicSub, cmd);
+    };
+
+    const publishField = (obj) => {
+        if (!clientRef.current) return;
+        sendCmd(clientRef.current, topicSub, obj);
+    };
+
+    // ============================================================
+    // 🔥 AUTO SEND_ON SETIAP 5 DETIK KETIKA HALAMAN DIBUKA
+    // ============================================================
     useEffect(() => {
-        if (!client) return;
+        if (!mqttConnected) return;
 
-        sendCmd(client, topicPubCmd, "SEND_ON");
+        // kirim pertama kali
+        publishPlain("SEND_ON");
 
-        sendOnIntervalRef.current = setInterval(() => {
-            sendCmd(client, topicPubCmd, "SEND_ON");
-        }, 10000);
+        // interval 5 detik
+        const intv = setInterval(() => {
+            publishPlain("SEND_ON");
+        }, 5000);
 
-        const handleUnload = () => {
-            if (sendOnIntervalRef.current) {
-                clearInterval(sendOnIntervalRef.current);
-                sendOnIntervalRef.current = null;
-            }
-            try {
-                if (client?.connected) client.publish(topicPubCmd, "SEND_OFF");
-            } catch { }
-        };
+        return () => clearInterval(intv);
+    }, [mqttConnected]);
 
-        window.addEventListener("beforeunload", handleUnload);
+    // ============================================================
+    // 🔥 AUTO SEND_OFF KETIKA HALAMAN DITUTUP
+    // ============================================================
+    useEffect(() => {
+        const handleClose = () => publishPlain("SEND_OFF");
+        window.addEventListener("beforeunload", handleClose);
+        return () => window.removeEventListener("beforeunload", handleClose);
+    }, []);
 
-        document.addEventListener("visibilitychange", () => {
-            if (document.visibilityState === "hidden") handleUnload();
-        });
-
-        return () => {
-            if (sendOnIntervalRef.current) {
-                clearInterval(sendOnIntervalRef.current);
-                sendOnIntervalRef.current = null;
-            }
-            window.removeEventListener("beforeunload", handleUnload);
-        };
-    }, [client]);
-
-    // ==========================================================
-    //  PUBLISH HELPER
-    // ==========================================================
-    const publish = (cmd, successMsg) => {
-        if (!client || !client.connected) {
-            toast.error("MQTT tidak terhubung!");
-            return;
-        }
-        sendCmd(client, topicPubCmd, cmd);
-        toast.success(successMsg);
+    // === MANUAL RELAY ===
+    const toggleRelay = (id) => {
+        const current = relays[id] ? 1 : 0;
+        const next = current ? 0 : 1;
+        publishField({ [id]: next });
     };
 
-    // ==========================================================
-    //  RELAY HANDLER
-    // ==========================================================
-    const toggleRelay = (relayKey) => {
-        if (security) {
-            toast.error("Tidak bisa! Security ON 🚫");
-            return;
-        }
-
-        const current = relay[relayKey];
-        const cmdMap = {
-            r1: current ? "R1_OFF" : "R1_ON",
-            r2: current ? "R2_OFF" : "R2_ON",
-            r4: current ? "R4_OFF" : "R4_ON",
-        };
-
-        const messageMap = {
-            R1_ON: "Kontak ON 🔌",
-            R1_OFF: "Kontak OFF ❌",
-            R2_ON: "Starter aktif 🟢",
-            R2_OFF: "Starter OFF 🔴",
-            R4_ON: "Lampu ON 💡",
-            R4_OFF: "Lampu OFF 🔦",
-        };
-
-        const cmd = cmdMap[relayKey];
-        const msg = messageMap[cmd];
-
-        setLoading((s) => ({ ...s, [relayKey]: true }));
-        publish(cmd, msg);
-
-        setTimeout(
-            () => setLoading((s) => ({ ...s, [relayKey]: false })),
-            800
-        );
-    };
-
-    // ==========================================================
-    //  SECURITY HANDLER
-    // ==========================================================
     const toggleSecurity = () => {
-        setLoading((s) => ({ ...s, security: true }));
-
-        if (security) {
-            publish("SEC_OFF", "Security dimatikan 🔓");
-            setSecurity(false);
-        } else {
-            publish("SEC_ON", "Security diaktifkan 🔒");
-            setSecurity(true);
-        }
-
-        setTimeout(
-            () => setLoading((s) => ({ ...s, security: false })),
-            800
-        );
+        publishPlain(security ? "SEC_OFF" : "SEC_ON");
+        setSecurity(s => !s);
     };
 
-    // GPS fallback
-    const lat = data?.gps?.lat ?? -7.981894;
-    const lng = data?.gps?.lng ?? 112.626503;
+    const starterPulse = () => publishPlain("R2_ON");
 
-    // ==========================================================
-    //  UI
-    // ==========================================================
+    const humanRssi = (rssi) => (rssi === -999 ? "unknown" : rssi);
+
+    // === UI ===
     return (
-        <main className="min-h-screen bg-gray-900 text-white p-6 flex flex-col items-center">
+        <main className="min-h-screen bg-gray-900 text-white p-6 flex flex-col items-center gap-6">
             <Toaster position="top-center" />
 
-            <motion.h1
-                initial={{ opacity: 0, y: -20 }}
-                animate={{ opacity: 1, y: 0 }}
-                transition={{ duration: 0.5 }}
-                className="text-3xl font-bold mb-2"
-            >
-                🚗 Smart Tracker Dashboard
+            <motion.h1 initial={{ opacity: 0, y: -8 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35 }} className="text-2xl font-semibold">
+                Smart Tracker Dashboard (AUTO SEND_ON + AUTO SEND_OFF)
             </motion.h1>
 
-            <p className="text-gray-400 mb-6">{status}</p>
+            <div className="w-full max-w-4xl grid grid-cols-1 md:grid-cols-3 gap-4">
 
-            {/* DEVICE CARD */}
-            <div className="w-full max-w-3xl bg-gray-800 rounded-2xl p-6 mb-6 shadow-lg">
-                <div className="grid grid-cols-2 gap-6">
-                    {/* LEFT SIDE */}
-                    <div>
-                        <h3 className="text-lg font-semibold mb-2">Device Info</h3>
-                        <div className="text-sm text-gray-300 space-y-1">
-                            <div>Device: {data.device_id ?? "-"}</div>
-                            <div>
-                                Timestamp:{" "}
-                                {data.timestamp
-                                    ? new Date(data.timestamp * 1000).toLocaleString()
-                                    : "-"}
-                            </div>
-                            <div>
-                                Vbat: {data.sys?.vbat ? `${data.sys.vbat} V` : "-"}
-                            </div>
-                            <div>Signal: {data.sys?.rssi ?? "-"} dBm</div>
-                            <div>Operator: {data.sys?.operator ?? "-"}</div>
-                        </div>
+                {/* PANEL KIRI */}
+                <div className="col-span-1 bg-gray-800 rounded-lg p-4">
+                    <div className="text-sm text-gray-300">Device ID</div>
+                    <div className="font-medium">{deviceId || "—"}</div>
+
+                    <div className="mt-3 text-sm text-gray-300">MQTT</div>
+                    <div>{mqttConnected ? "Connected" : "Disconnected"}</div>
+
+                    <div className="mt-3 text-sm text-gray-300">System</div>
+                    <div className="text-sm">
+                        VBAT: <strong>{sys.vbat.toFixed ? sys.vbat.toFixed(2) : sys.vbat} V</strong><br />
+                        RSSI: <strong>{humanRssi(sys.rssi)}</strong><br />
+                        Operator: <strong>{sys.operator || "—"}</strong>
                     </div>
 
-                    {/* RIGHT SIDE CONTROLS */}
-                    <div>
-                        <h3 className="text-lg font-semibold mb-2">Controls</h3>
+                    <div className="mt-3 text-sm text-gray-300">Flags</div>
+                    <div className="flex gap-2 mt-2">
+                        <button onClick={toggleSecurity} className={`px-3 py-1 rounded ${security ? "bg-yellow-500" : "bg-gray-700"}`}>
+                            Security {security ? "ON" : "OFF"}
+                        </button>
 
-                        {/* RELAY BUTTONS */}
-                        <div className="flex gap-2 flex-wrap">
-                            {[
-                                { k: "r1", labelOn: "🔴 Matikan Kontak", labelOff: "🟢 Nyalakan Kontak" },
-                                { k: "r2", labelOn: "🔴 Matikan Starter", labelOff: "🟢 Starter" },
-                                { k: "r4", labelOn: "🔴 Matikan Lampu", labelOff: "💡 Nyalakan Lampu" },
-                            ].map((b) => (
-                                <button
-                                    key={b.k}
-                                    onClick={() => toggleRelay(b.k)}
-                                    disabled={loading[b.k] || security}
-                                    className={`px-4 py-2 rounded-md font-medium transition-all ${relay[b.k] ? "bg-red-600" : "bg-green-600"
-                                        } ${security ? "opacity-40 cursor-not-allowed" : ""}`}
-                                >
-                                    {loading[b.k]
-                                        ? "⏳"
-                                        : relay[b.k]
-                                            ? b.labelOn
-                                            : b.labelOff}
-                                </button>
-                            ))}
-                        </div>
+                        <button onClick={() => publishPlain(sendStatus ? "SEND_OFF" : "SEND_ON")} className={`px-3 py-1 rounded ${sendStatus ? "bg-blue-600" : "bg-gray-700"}`}>
+                            SEND {sendStatus ? "ON" : "OFF"}
+                        </button>
+                    </div>
+                </div>
 
-                        {/* SECURITY BUTTON */}
-                        <div className="mt-4">
-                            <button
-                                onClick={toggleSecurity}
-                                disabled={loading.security}
-                                className={`px-4 py-2 rounded-md font-medium transition-all ${security ? "bg-red-600" : "bg-blue-600"
-                                    }`}
-                            >
-                                {loading.security
-                                    ? "⏳"
-                                    : security
-                                        ? "🔒 Matikan Security"
-                                        : "🔓 Aktifkan Security"}
-                            </button>
+                {/* PANEL MAP */}
+                <div className="col-span-1 md:col-span-2 bg-gray-800 rounded-lg p-4">
+                    <div className="mb-3 text-gray-300">GPS</div>
+                    <div className="grid grid-cols-2 gap-2">
+                        <div>Lat: <strong>{gps.lat}</strong></div>
+                        <div>Lng: <strong>{gps.lng}</strong></div>
+                        <div>Sats: <strong>{gps.sat}</strong></div>
+                        <div>Speed: <strong>{gps.spd} km/h</strong></div>
+                    </div>
+
+                    <div className="mt-4">
+                        <MapView lat={gps.lat} lng={gps.lng} />
+                    </div>
+                </div>
+
+                {/* PANEL RELAY */}
+                <div className="col-span-1 bg-gray-800 rounded-lg p-4">
+                    <div className="text-sm text-gray-300">Relays</div>
+
+                    <div className="grid grid-cols-2 gap-2 mt-2">
+
+                        {/* R1 */}
+                        <button
+                            onClick={() => toggleRelay("r1")}
+                            className={`p-3 rounded ${relays.r1 ? "bg-green-600" : "bg-red-600"}`}
+                        >
+                            R1 (Kontak) — {relays.r1 ? "ON" : "OFF"}
+                        </button>
+
+                        {/* R2 (Starter) */}
+                        <button
+                            onClick={() => starterPulse()}
+                            className="p-3 rounded bg-yellow-700"
+                        >
+                            R2 (Starter)
+                        </button>
+
+                        {/* === MODIFIED — R3 AUTO === */}
+                        <button
+                            disabled
+                            className={`p-3 rounded ${relays.r3 ? "bg-green-700" : "bg-gray-600"}`}
+                        >
+                            R3 (AUTO) — {relays.r3 ? "ON" : "OFF"}
+                        </button>
+
+                        {/* R4 */}
+                        <button
+                            onClick={() => toggleRelay("r4")}
+                            className={`p-3 rounded ${relays.r4 ? "bg-green-600" : "bg-red-600"}`}
+                        >
+                            R4 — {relays.r4 ? "ON" : "OFF"}
+                        </button>
+
+                    </div>
+
+                    {/* COMMAND MANUAL */}
+                    <div className="w-full bg-gray-800 rounded-lg p-4 mt-6">
+                        <h2 className="text-lg font-semibold mb-3">Semua Command Manual</h2>
+
+                        <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                            <button onClick={() => publishPlain("PING")} className="bg-blue-700 p-2 rounded">PING</button>
+
+                            <button onClick={() => publishPlain("R1_ON")} className="bg-green-700 p-2 rounded">R1 ON</button>
+                            <button onClick={() => publishPlain("R1_OFF")} className="bg-red-700 p-2 rounded">R1 OFF</button>
+
+                            <button onClick={() => publishPlain("R2_ON")} className="bg-green-700 p-2 rounded">R2 ON</button>
+                            <button onClick={() => publishPlain("R2_OFF")} className="bg-red-700 p-2 rounded">R2 OFF</button>
+
+                            {/* === R3 manual dihapus karena AUTO === */}
+
+                            <button onClick={() => publishPlain("R4_ON")} className="bg-green-700 p-2 rounded">R4 ON</button>
+                            <button onClick={() => publishPlain("R4_OFF")} className="bg-red-700 p-2 rounded">R4 OFF</button>
+
+                            <button onClick={() => publishPlain("SEC_ON")} className="bg-purple-700 p-2 rounded">SEC ON</button>
+                            <button onClick={() => publishPlain("SEC_OFF")} className="bg-gray-700 p-2 rounded">SEC OFF</button>
+
+                            <button onClick={() => publishPlain("SEND_ON")} className="bg-blue-600 p-2 rounded">SEND ON</button>
+                            <button onClick={() => publishPlain("SEND_OFF")} className="bg-gray-600 p-2 rounded">SEND OFF</button>
+
+                            <button onClick={() => publishPlain("MODEM_RST")} className="bg-red-800 p-2 rounded">RESET MODEM</button>
                         </div>
                     </div>
                 </div>
             </div>
 
-            {/* MAP */}
-            <div className="w-full max-w-3xl mb-6">
-                <h3 className="text-lg font-semibold mb-2">Map</h3>
-                <div className="h-72 rounded-xl overflow-hidden border border-gray-700 shadow-md">
-                    <MapView lat={lat} lng={lng} />
-                </div>
+            <div className="w-full max-w-4xl bg-gray-800 rounded-lg p-4 text-sm">
+                <div className="text-gray-300 mb-2">Last payload (from ESP32):</div>
+                <pre className="text-xs text-gray-100 whitespace-pre-wrap">
+                    {lastRaw ? JSON.stringify(lastRaw, null, 2) : "No data yet"}
+                </pre>
             </div>
         </main>
     );
